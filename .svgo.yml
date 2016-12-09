@@ -1,0 +1,8 @@
+plugins:
+  - removeTitle: true
+  - removeStyleElement: true
+  - removeAttrs:
+      attrs:
+        - fill
+        - fill-rule
+        - stroke
