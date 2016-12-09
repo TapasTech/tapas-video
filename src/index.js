@@ -7,6 +7,18 @@ const icons = {
   fullscreen: '__ICON_fullscreen__',
 };
 
+function leftpad(s, len, p='0') {
+  s = s.toString();
+  while (s.length < len) s = p + s;
+  return s;
+}
+
+function findClosest(el, predicate, stop) {
+  while (el && el !== stop && !predicate(el)) el = el.parentNode;
+  if (el === stop) el = null;
+  return el || null;
+}
+
 export default class Video extends EventEmitter {
   constructor(container, options) {
     super();
@@ -24,7 +36,8 @@ export default class Video extends EventEmitter {
     if (!wrap) {
       throw new Error('Container element is required!');
     }
-    const el = this.el = document.createElement('iframe');
+    const els = this.els = {};
+    const el = els.iframe = document.createElement('iframe');
     el.allowFullscreen = true;
     wrap.appendChild(el);
     el.className = 'tapas-video';
@@ -41,7 +54,7 @@ export default class Video extends EventEmitter {
     </div>
     <div class="tpv-volume">
       <div class="tpv-icon" data-action="volume"></div>
-      <div class="tpv-volume-panel">
+      <div class="tpv-volume-panel menu">
         <div class="tpv-volume-body">
           <div class="tpv-volume-bar"></div>
           <div class="tpv-volume-cursor"></div>
@@ -53,36 +66,60 @@ export default class Video extends EventEmitter {
   </div>
 </div>`);
     this.addStyle(this.options.style);
-    const tpv = doc.querySelector('.tpv');
-    tpv.addEventListener('click', e => {
-      let target;
-      for (target = e.target; target !== tpv && !target.hasAttribute('data-action'); target = target.parentNode);
-      const action = target.getAttribute('data-action');
-      const handle = this[`handle_${action}`];
-      handle && handle.call(this);
-    }, false);
-    const video = this.video = doc.querySelector('video');
+    const tpv = els.container = doc.querySelector('.tpv');
+    const video = els.video = doc.querySelector('video');
+    els.cursor = doc.querySelector('.tpv-cursor');
+    els.volume = {
+      menu: doc.querySelector('.tpv-volume'),
+      cursor: doc.querySelector('.tpv-volume-cursor'),
+    };
+    els.time = doc.querySelector('.tpv-time');
+    els.items = {};
     Array.prototype.forEach.call(doc.querySelectorAll('.tpv-icon'), icon => {
-      icon.innerHTML = this.getIcon(icon.getAttribute('data-action'));
+      const action = icon.getAttribute('data-action');
+      icon.innerHTML = this.getIcon(action);
+      els.items[action] = icon;
     });
     [
       'canplay',
       'durationchange',
       'ended',
-      'play',
       'pause',
+      'play',
       'playing',
       'progress',
+      'volumechange',
+      'timeupdate',
     ].forEach(type => {
       video.addEventListener(type, event => {
         this.emit(type, event);
       }, false);
     });
+    this.on('pause', e => this.onStatusChange());
+    this.on('playing', e => this.onStatusChange());
+    this.on('volumechange', e => this.onVolumeChange());
+    this.on('durationchange', e => this.onTimeUpdate());
+    this.on('timeupdate', e => this.onTimeUpdate());
+    tpv.addEventListener('click', e => {
+      Array.prototype.forEach.call(doc.querySelectorAll('.open'), menu => {
+        !menu.contains(e.target) && menu.classList.remove('open');
+      });
+      const target = findClosest(e.target, el => el.hasAttribute('data-action'), tpv);
+      if (target) {
+        const action = target.getAttribute('data-action');
+        const handle = this[`handle_${action}`];
+        if (handle) {
+          handle.call(this);
+          return;
+        }
+      }
+    }, false);
+    this.onVolumeChange();
   }
 
   addStyle(css) {
     if (!css) return;
-    const doc = this.el.contentDocument;
+    const doc = this.els.iframe.contentDocument;
     const style = doc.createElement('style');
     style.innerHTML = css;
     doc.head.appendChild(style);
@@ -97,14 +134,52 @@ export default class Video extends EventEmitter {
   setVideo(url) {
     console.log('set video:', url);
     this.url = url;
-    this.video.src = this.url;
+    this.els.video.src = this.url;
   }
 
   play() {
     if (!this.url) return;
     this.emit('play');
-    console.log('play');
-    this.video.play();
+    this.els.video.play();
+  }
+
+  setVolume(v) {
+    this.els.video.volume = v;
+  }
+
+  onStatusChange() {
+    const {els} = this;
+    els.items.play.innerHTML = this.getIcon(els.video.paused ? 'play' : 'pause');
+  }
+
+  onVolumeChange() {
+    const {els} = this;
+    els.volume.cursor.style.bottom = els.video.volume * 100 + '%';
+  }
+
+  onTimeUpdate() {
+    const {els} = this;
+    const {currentTime, duration} = els.video;
+    els.time.textContent = `${this.formatTime(currentTime)}/${this.formatTime(duration)}`;
+    els.cursor.style.left = currentTime / duration * 100 + '%';
+  }
+
+  formatTime(time) {
+    time = ~~ time;
+    if (isNaN(time)) return '??:??';
+    const parts = [time % 60];
+    time = ~~ (time / 60);
+    if (time >= 60) {
+      parts.unshift(time % 60);
+      time = ~~ (time / 60);
+    }
+    parts.unshift(time);
+    return parts.map(part => leftpad(part, 2)).join(':');
+  }
+
+  handle_play() {
+    const {video} = this.els;
+    video.paused ? video.play() : video.pause();
   }
 
   handle_fullscreen() {
@@ -112,8 +187,13 @@ export default class Video extends EventEmitter {
       const exitFullscreen = document.exitFullscreen || document.webkitExitFullscreen;
       exitFullscreen && exitFullscreen.call(document);
     } else {
-      const requestFullscreen = this.el.requestFullscreen || this.el.webkitRequestFullscreen;
-      requestFullscreen && requestFullscreen.call(this.el);
+      const {iframe} = this.els;
+      const requestFullscreen = iframe.requestFullscreen || iframe.webkitRequestFullscreen;
+      requestFullscreen && requestFullscreen.call(iframe);
     }
+  }
+
+  handle_volume() {
+    this.els.volume.menu.classList.toggle('open');
   }
 }
