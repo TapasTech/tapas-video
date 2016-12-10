@@ -1,6 +1,6 @@
 {
   "name": "tapas-video",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Video player based on HTML5",
   "main": "lib",
   "scripts": {
