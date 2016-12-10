@@ -2,11 +2,19 @@ const fs = require('fs');
 const ensureDir = require('ensure-dir');
 const promisify = require('es6-promisify');
 const less = require('less');
+const LessPluginAutoPrefix = require('less-plugin-autoprefix');
+const LessPluginCleanCSS = require('less-plugin-clean-css');
+const htmlmin = require('htmlmin');
 const watch = require('watch');
 const rollup = require('rollup');
 const rollupConfig = require('./rollup.config');
 const readFile = promisify(fs.readFile);
 const writeFile = promisify(fs.writeFile);
+const reICON = /'__(\w+)__'/g;
+const lessPlugins = [
+  new LessPluginAutoPrefix(),
+  new LessPluginCleanCSS(),
+];
 var cache;
 
 function loadData(key) {
@@ -18,22 +26,36 @@ function loadData(key) {
 
 function buildCSS() {
   return readFile('src/style.less', 'utf8')
-  .then(input => less.render(input))
+  .then(input => less.render(input, {
+    plugins: lessPlugins,
+  }))
   .then(output => output.css);
 }
 
+function buildHTML() {
+  return readFile('src/template.html', 'utf8')
+  .then(input => htmlmin(input));
+}
+
 function buildJS() {
-  return Promise.all([
-    buildCSS(),
-    rollup.rollup(Object.assign({cache}, rollupConfig)),
-    ensureDir('lib'),
-  ])
-  .then(([css, bundle]) => {
+  return rollup.rollup(Object.assign({cache}, rollupConfig))
+  .then(bundle => {
     cache = bundle;
     const res = bundle.generate(rollupConfig);
+    return res.code;
+  })
+}
+
+function buildAll() {
+  return Promise.all([
+    buildHTML(),
+    buildCSS(),
+    buildJS(),
+    ensureDir('lib'),
+  ])
+  .then(([html, css, js]) => {
     const promises = [];
-    const reICON = /'__(\w+)__'/g;
-    res.code.replace(reICON, (m, key) => {
+    js.replace(reICON, (m, key) => {
       promises.push(loadData(key));
     });
     return Promise.all(promises)
@@ -41,8 +63,9 @@ function buildJS() {
       [item.key]: item.value,
     }), {
       STYLE: css,
+      TEMPLATE: html,
     }))
-    .then(icons => res.code.replace(reICON, (m, key) => JSON.stringify(icons[key] || '')))
+    .then(icons => js.replace(reICON, (m, key) => JSON.stringify(icons[key] || '')))
     .then(code => writeFile(rollupConfig.dest, code, 'utf8'));
   });
 }
@@ -52,7 +75,7 @@ const safeBuild = function () {
     willBuild = false;
     building = true;
     console.time('Build');
-    return buildJS()
+    return buildAll()
     .catch(err => {
       console.error(err);
     })

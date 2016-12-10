@@ -43,34 +43,19 @@ export default class Video extends EventEmitter {
     el.className = 'tapas-video';
     el.setAttribute('style', 'width:100%;height:100%;border:none;');
     const doc = el.contentDocument;
-    doc.write(`\
-<div class="tpv">
-  <video></video>
-  <div class="tpv-ctrl">
-    <div class="tpv-icon" data-action="play"></div>
-    <div class="tpv-progress">
-      <div class="tpv-bar"><div class="tpv-played"></div></div>
-      <div class="tpv-cursor"></div>
-    </div>
-    <div class="tpv-volume">
-      <div class="tpv-icon" data-action="volume"></div>
-      <div class="tpv-volume-panel menu">
-        <div class="tpv-volume-body">
-          <div class="tpv-volume-bar"></div>
-          <div class="tpv-volume-cursor"></div>
-        </div>
-      </div>
-    </div>
-    <div class="tpv-time"></div>
-    <div class="tpv-icon" data-action="fullscreen"></div>
-  </div>
-</div>`);
+    doc.write('__TEMPLATE__');
     this.addStyle(this.options.style);
     const tpv = els.container = doc.querySelector('.tpv');
     const video = els.video = doc.querySelector('video');
-    els.cursor = doc.querySelector('.tpv-cursor');
+    els.progress = {
+      body: doc.querySelector('.tpv-progress'),
+      played: doc.querySelector('.tpv-played'),
+      cursor: doc.querySelector('.tpv-cursor'),
+    };
     els.volume = {
       menu: doc.querySelector('.tpv-volume'),
+      panel: doc.querySelector('.tpv-volume-panel'),
+      body: doc.querySelector('.tpv-volume-body'),
       cursor: doc.querySelector('.tpv-volume-cursor'),
     };
     els.time = doc.querySelector('.tpv-time');
@@ -101,9 +86,7 @@ export default class Video extends EventEmitter {
     this.on('durationchange', e => this.onTimeUpdate());
     this.on('timeupdate', e => this.onTimeUpdate());
     tpv.addEventListener('click', e => {
-      Array.prototype.forEach.call(doc.querySelectorAll('.open'), menu => {
-        !menu.contains(e.target) && menu.classList.remove('open');
-      });
+      this.hidePopups(e.target);
       const target = findClosest(e.target, el => el.hasAttribute('data-action'), tpv);
       if (target) {
         const action = target.getAttribute('data-action');
@@ -114,7 +97,74 @@ export default class Video extends EventEmitter {
         }
       }
     }, false);
+
+    function stopEvent(e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    function getOffset(e, target) {
+      target = target || e.target;
+      const rect = target.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      return {
+        x,
+        y,
+        w: rect.right - rect.left,
+        h: rect.bottom - rect.top,
+      };
+    }
+    function bindBarEvents(data, onUpdate, vertical) {
+      function getMovingPos(e) {
+        const {moving} = data;
+        const {x, y, w, h} = getOffset(e, data.body);
+        const x1 = x - (moving ? moving.deltaX : 0);
+        const y1 = y - (moving ? moving.deltaY : 0);
+        let p = vertical ? 1 - y1 / h : x1 / w;
+        if (p < 0) p = 0;
+        else if (p > 1) p = 1;
+        return p;
+      }
+      function onMouseMove(e) {
+        const pos = getMovingPos(e) * 100 + '%';
+        if (vertical) {
+          data.cursor.style.bottom = pos;
+        } else {
+          data.cursor.style.left = pos;
+        }
+      }
+      function onMouseUp(e) {
+        stopEvent(e);
+        onUpdate(getMovingPos(e));
+        data.moving = null;
+        doc.removeEventListener('mousemove', onMouseMove, false);
+        doc.removeEventListener('mouseup', onMouseUp, true);
+      }
+      function onMouseDown(e) {
+        stopEvent(e);
+        const {x, y, w, h} = getOffset(e);
+        data.moving = {
+          deltaX: x - w / 2,
+          deltaY: y - h / 2,
+        };
+        doc.addEventListener('mousemove', onMouseMove, false);
+        doc.addEventListener('mouseup', onMouseUp, true);
+      }
+      data.cursor.addEventListener('mousedown', onMouseDown, false);
+      data.body.addEventListener('mouseup', e => {
+        onUpdate(getMovingPos(e));
+      }, false);
+    }
+    bindBarEvents(els.progress, p => this.setProgress(p));
+    bindBarEvents(els.volume, p => this.setVolume(p), true);
     this.onVolumeChange();
+  }
+
+  hidePopups(exceptChild) {
+    Array.prototype.forEach.call(this.els.iframe.contentDocument.querySelectorAll('.open'), menu => {
+      if (exceptChild && menu.contains(exceptChild)) return;
+      menu.classList.remove('open');
+    });
   }
 
   addStyle(css) {
@@ -132,9 +182,13 @@ export default class Video extends EventEmitter {
   }
 
   setVideo(url) {
-    console.log('set video:', url);
     this.url = url;
     this.els.video.src = this.url;
+  }
+
+  setProgress(p) {
+    const {video} = this.els;
+    video.currentTime = p * video.duration;
   }
 
   play() {
@@ -154,14 +208,20 @@ export default class Video extends EventEmitter {
 
   onVolumeChange() {
     const {els} = this;
-    els.volume.cursor.style.bottom = els.video.volume * 100 + '%';
+    if (!els.volume.moving) {
+      els.volume.cursor.style.bottom = els.video.volume * 100 + '%';
+    }
   }
 
   onTimeUpdate() {
     const {els} = this;
     const {currentTime, duration} = els.video;
     els.time.textContent = `${this.formatTime(currentTime)}/${this.formatTime(duration)}`;
-    els.cursor.style.left = currentTime / duration * 100 + '%';
+    const width = currentTime / duration * 100 + '%';
+    els.progress.played.style.width = width;
+    if (!els.progress.moving) {
+      els.progress.cursor.style.left = width;
+    }
   }
 
   formatTime(time) {
